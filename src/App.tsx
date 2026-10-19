@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { ref, onValue } from 'firebase/database';
 import { auth, rtdb } from './firebase';
@@ -11,7 +11,9 @@ import {
   findUserByStudyId,
   createUserRecord
 } from './services/userService';
-import { subscribeToConversations } from './services/chatService';
+import { subscribeToConversations, sendMessage } from './services/chatService';
+import { soundEffects } from './utils/soundEffects';
+import { showIncomingNotification } from './services/notificationService';
 
 // Components
 import { Header } from './components/Header';
@@ -26,6 +28,8 @@ import { QRScannerModal } from './components/QRScannerModal';
 import { EditProfileModal } from './components/EditProfileModal';
 import { PhotoUrlModal } from './components/PhotoUrlModal';
 import { UserProfileModal } from './components/UserProfileModal';
+import { VoiceCallModal } from './components/VoiceCallModal';
+import { FirebaseRulesModal } from './components/FirebaseRulesModal';
 import { ToastContainer } from './components/Toast';
 
 export default function App() {
@@ -49,6 +53,12 @@ export default function App() {
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isPhotoUrlModalOpen, setIsPhotoUrlModalOpen] = useState(false);
   const [previewUser, setPreviewUser] = useState<UserProfile | null>(null);
+  const [activeVoiceCallPartner, setActiveVoiceCallPartner] = useState<UserProfile | null>(null);
+  const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
+
+  // Tracking latest conversation timestamps to alert on incoming messages
+  const prevConvsRef = useRef<Record<string, number>>({});
+  const isInitialConvsLoad = useRef(true);
 
   // Notification toasts
   const [toasts, setToasts] = useState<NotificationToast[]>([]);
@@ -56,10 +66,11 @@ export default function App() {
   const addToast = (
     title: string, 
     message: string, 
-    type: 'success' | 'error' | 'info' | 'message' = 'info'
+    type: 'success' | 'error' | 'info' | 'message' = 'info',
+    onClick?: () => void
   ) => {
     const id = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const newToast: NotificationToast = { id, title, message, type };
+    const newToast: NotificationToast = { id, title, message, type, onClick };
     setToasts((prev) => [...prev.slice(-3), newToast]);
 
     setTimeout(() => {
@@ -70,6 +81,19 @@ export default function App() {
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
+
+  // Audio unlock listener so sound effects play without autoplay restriction
+  useEffect(() => {
+    const unlock = () => {
+      soundEffects.unlockAudio();
+    };
+    window.addEventListener('click', unlock, { once: true });
+    window.addEventListener('touchstart', unlock, { once: true });
+    return () => {
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+  }, []);
 
   // Monitor Firebase RTDB connection state
   useEffect(() => {
@@ -111,6 +135,8 @@ export default function App() {
         setActiveChatPartner(null);
         setConversations([]);
         setSuggestedUsers([]);
+        prevConvsRef.current = {};
+        isInitialConvsLoad.current = true;
       }
       setIsAuthLoading(false);
     });
@@ -118,7 +144,7 @@ export default function App() {
     return () => unsubscribeAuth();
   }, []);
 
-  // Monitor Current User's Profile in RTDB and Presence
+  // Monitor Current User's Profile in RTDB and Presence & Conversations
   useEffect(() => {
     if (!authUser || !currentUser) return;
 
@@ -132,15 +158,66 @@ export default function App() {
       }
     });
 
-    // Conversations subscription
+    // Reset initial load tracking on auth change
+    isInitialConvsLoad.current = true;
+
+    // Conversations subscription with incoming audio chime and notifications
     const unsubscribeConversations = subscribeToConversations(authUser.uid, (list) => {
       setConversations(list);
+
+      // On initial load, record timestamps without ringing
+      if (isInitialConvsLoad.current) {
+        list.forEach((item) => {
+          prevConvsRef.current[item.chatId] = item.lastTimestamp;
+        });
+        isInitialConvsLoad.current = false;
+        return;
+      }
+
+      // Check for incoming new messages from other participants
+      list.forEach((item) => {
+        const prevTs = prevConvsRef.current[item.chatId] || 0;
+        if (item.lastTimestamp > prevTs && item.lastSenderId !== authUser.uid) {
+          // Play incoming audio chime
+          soundEffects.playReceived();
+
+          const partner = item.otherUser || {
+            uid: item.otherUid,
+            displayName: 'Study Member',
+            username: 'member',
+            studyId: 'SM-00000',
+            email: '',
+            createdAt: item.lastTimestamp,
+            isOnline: false,
+          };
+          const partnerName = partner.displayName || partner.username || 'Study Partner';
+          const msgText = item.lastMessage || 'Sent you a message';
+
+          // If not currently in active chat with this partner, show toast & push notification
+          if (activeChatPartner?.uid !== item.otherUid) {
+            addToast(
+              `New message from ${partnerName}`,
+              msgText,
+              'message',
+              () => {
+                setActiveChatPartner(partner);
+              }
+            );
+
+            showIncomingNotification(partnerName, msgText, partner.photoURL, () => {
+              window.focus();
+              setActiveChatPartner(partner);
+            });
+          }
+        }
+        prevConvsRef.current[item.chatId] = item.lastTimestamp;
+      });
     });
 
     // Load registered users for suggestions
     const loadSuggested = async () => {
       try {
-        const users = await getSuggestedUsers(authUser.uid, 20);
+        const users = await getSuggestedUsers(authUser.uid, 50);
         setSuggestedUsers(users);
       } catch (err) {
         console.warn('Suggested users fetch warning:', err);
@@ -148,8 +225,8 @@ export default function App() {
     };
     loadSuggested();
 
-    // Refresh suggestions every 45s
-    const interval = setInterval(loadSuggested, 45000);
+    // Refresh suggestions every 30s
+    const interval = setInterval(loadSuggested, 30000);
 
     return () => {
       cleanupPresence();
@@ -157,7 +234,7 @@ export default function App() {
       unsubscribeConversations();
       clearInterval(interval);
     };
-  }, [authUser?.uid]);
+  }, [authUser?.uid, activeChatPartner?.uid]);
 
   // Handle URL hash on load (e.g. #studyId=SM-12345 or shared links)
   useEffect(() => {
@@ -185,7 +262,7 @@ export default function App() {
   // Total unread messages across all conversations
   const totalUnreadCount = conversations.reduce((acc, curr) => acc + (curr.unreadCount || 0), 0);
 
-  // Loading Screen (showing while auth initializes or user profile is being synced from RTDB)
+  // Loading Screen
   if (isAuthLoading || (authUser && !currentUser)) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 aurora-bg">
@@ -194,7 +271,7 @@ export default function App() {
             <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
           </div>
           <h2 className="text-base font-bold text-slate-800">Study Mods Chat</h2>
-          <p className="text-xs text-slate-500 mt-1">Connecting...</p>
+          <p className="text-xs text-slate-500 mt-1">Connecting to Firebase...</p>
         </div>
       </div>
     );
@@ -224,6 +301,7 @@ export default function App() {
         currentUser={currentUser}
         onOpenSearch={() => setCurrentTab('discover')}
         onOpenProfile={() => setCurrentTab('profile')}
+        onOpenRules={() => setIsRulesModalOpen(true)}
         isOnline={isConnected}
       />
 
@@ -259,6 +337,7 @@ export default function App() {
             onOpenEditModal={() => setIsEditProfileOpen(true)}
             onOpenPhotoUrlModal={() => setIsPhotoUrlModalOpen(true)}
             onOpenMyQR={() => setIsMyQROpen(true)}
+            onOpenRules={() => setIsRulesModalOpen(true)}
             onNotify={addToast}
           />
         )}
@@ -278,6 +357,7 @@ export default function App() {
           partner={activeChatPartner}
           onBack={() => setActiveChatPartner(null)}
           onOpenPartnerProfile={(partner) => setPreviewUser(partner)}
+          onStartCall={(partner) => setActiveVoiceCallPartner(partner)}
           onNotify={addToast}
         />
       )}
@@ -333,15 +413,42 @@ export default function App() {
         onNotify={addToast}
       />
 
-      {/* User Profile Preview Modal */}
+      {/* User Profile Preview Modal with Quick Wave / Greeting auto-send */}
       <UserProfileModal
         user={previewUser}
         isOpen={previewUser !== null}
         onClose={() => setPreviewUser(null)}
-        onStartChat={(user) => {
+        onStartChat={async (user, initialGreeting) => {
           setPreviewUser(null);
           setActiveChatPartner(user);
+          if (initialGreeting && currentUser) {
+            try {
+              await sendMessage(currentUser, user, initialGreeting, true);
+            } catch (e) {
+              console.warn('Initial greeting send notice:', e);
+            }
+          }
         }}
+        onStartCall={(user) => {
+          setPreviewUser(null);
+          setActiveVoiceCallPartner(user);
+        }}
+        onNotify={addToast}
+      />
+
+      {/* Voice Call Modal */}
+      {activeVoiceCallPartner && (
+        <VoiceCallModal
+          partner={activeVoiceCallPartner}
+          isOpen={activeVoiceCallPartner !== null}
+          onClose={() => setActiveVoiceCallPartner(null)}
+        />
+      )}
+
+      {/* Firebase Database Security Rules Helper Modal */}
+      <FirebaseRulesModal
+        isOpen={isRulesModalOpen}
+        onClose={() => setIsRulesModalOpen(false)}
         onNotify={addToast}
       />
     </div>

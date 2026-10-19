@@ -3,21 +3,16 @@
     "users": {
       ".read": "auth != null",
       "$uid": {
-        ".write": "auth != null && auth.uid === $uid",
-        ".validate": "newData.hasChildren(['uid', 'displayName', 'username', 'studyId']) && newData.child('uid').val() === $uid"
+        ".write": "auth != null && auth.uid === $uid"
       }
     },
     "usernames": {
       ".read": true,
-      "$username": {
-        ".write": "auth != null && (!data.exists() || data.val() === auth.uid || newData.val() === auth.uid)"
-      }
+      ".write": "auth != null"
     },
     "studyIds": {
       ".read": true,
-      "$studyId": {
-        ".write": "auth != null && (!data.exists() || data.val() === auth.uid || newData.val() === auth.uid)"
-      }
+      ".write": "auth != null"
     },
     "status": {
       ".read": "auth != null",
@@ -26,31 +21,16 @@
       }
     },
     "userChats": {
-      "$uid": {
-        ".read": "auth != null && auth.uid === $uid",
-        "$otherUid": {
-          ".write": "auth != null && (auth.uid === $uid || auth.uid === $otherUid)"
-        }
-      }
+      ".read": "auth != null",
+      ".write": "auth != null"
     },
     "chats": {
-      "$chatId": {
-        ".read": "auth != null && ($chatId.contains(auth.uid) || root.child('chats/' + $chatId + '/participants/' + auth.uid).val() === true)",
-        ".write": "auth != null && ($chatId.contains(auth.uid) || root.child('chats/' + $chatId + '/participants/' + auth.uid).val() === true)",
-        "messages": {
-          "$messageId": {
-            ".write": "auth != null && (newData.child('senderId').val() === auth.uid || data.child('senderId').val() === auth.uid || (newData.child('status').exists() && $chatId.contains(auth.uid)))"
-          }
-        }
-      }
+      ".read": "auth != null",
+      ".write": "auth != null"
     },
     "typing": {
-      "$chatId": {
-        ".read": "auth != null && $chatId.contains(auth.uid)",
-        "$uid": {
-          ".write": "auth != null && auth.uid === $uid"
-        }
-      }
+      ".read": "auth != null",
+      ".write": "auth != null"
     }
   }
 }

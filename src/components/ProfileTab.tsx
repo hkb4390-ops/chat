@@ -23,6 +23,7 @@ interface ProfileTabProps {
   onOpenEditModal: () => void;
   onOpenPhotoUrlModal: () => void;
   onOpenMyQR: () => void;
+  onOpenRules?: () => void;
   onNotify: (title: string, message: string, type?: 'success' | 'info' | 'error') => void;
 }
 
@@ -31,6 +32,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
   onOpenEditModal,
   onOpenPhotoUrlModal,
   onOpenMyQR,
+  onOpenRules,
   onNotify,
 }) => {
   const [copiedId, setCopiedId] = useState(false);
@@ -133,22 +135,83 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
         </div>
 
         {/* Quick Action Buttons */}
-        <div className="grid grid-cols-2 gap-2 mt-4">
+        <div className="grid grid-cols-3 gap-2 mt-4">
           <button
             onClick={onOpenEditModal}
-            className="p-2.5 rounded-xl bg-white/80 hover:bg-white text-slate-700 text-xs font-semibold border border-slate-200/70 shadow-xs flex items-center justify-center gap-1.5 transition-all"
+            className="p-2.5 rounded-xl bg-white/80 hover:bg-white text-slate-700 text-xs font-semibold border border-slate-200/70 shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
           >
             <Edit3 className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Edit Profile</span>
+            <span>Edit</span>
           </button>
 
           <button
             onClick={onOpenPhotoUrlModal}
-            className="p-2.5 rounded-xl bg-white/80 hover:bg-white text-slate-700 text-xs font-semibold border border-slate-200/70 shadow-xs flex items-center justify-center gap-1.5 transition-all"
+            className="p-2.5 rounded-xl bg-white/80 hover:bg-white text-slate-700 text-xs font-semibold border border-slate-200/70 shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
           >
             <Link2 className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Photo URL</span>
+            <span>Photo</span>
           </button>
+
+          <button
+            onClick={onOpenMyQR}
+            className="p-2.5 rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold border border-indigo-100 shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+          >
+            <QrCode className="w-3.5 h-3.5 text-indigo-600" />
+            <span>QR Code</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Share Your Profile Card */}
+      <div className="liquid-glass rounded-3xl p-5 shadow-xs border border-white/80 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Share Your Profile
+              </h3>
+              <p className="text-[11px] text-slate-500">Invite classmates or study buddies to message you</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <button
+            onClick={async () => {
+              const url = `${window.location.origin}${window.location.pathname}#studyId=${encodeURIComponent(currentUser.studyId)}`;
+              if (navigator.share) {
+                try {
+                  await navigator.share({
+                    title: `Chat with ${currentUser.displayName} on Study Mods`,
+                    text: `Connect with me on Study Mods Chat! My Study ID is ${currentUser.studyId}`,
+                    url,
+                  });
+                } catch {}
+              } else {
+                await navigator.clipboard.writeText(url);
+                onNotify('Link Copied', 'Profile link copied to clipboard!', 'success');
+              }
+            }}
+            className="p-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200/80 shadow-2xs flex items-center justify-center gap-2 active:scale-95 transition-all"
+          >
+            <Copy className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Copy Link</span>
+          </button>
+
+          <a
+            href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+              `Hey! Add me on Study Mods Chat to collaborate on study notes and assignments. My Study ID is: ${currentUser.studyId}\n${window.location.origin}${window.location.pathname}#studyId=${currentUser.studyId}`
+            )}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold border border-emerald-200 shadow-2xs flex items-center justify-center gap-2 active:scale-95 transition-all"
+          >
+            <span className="text-sm">💬</span>
+            <span>WhatsApp</span>
+          </a>
         </div>
       </div>
 
@@ -206,6 +269,27 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Database Security Rules Helper Card */}
+      {onOpenRules && (
+        <div className="liquid-glass rounded-3xl p-4 shadow-xs border border-white/80 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-slate-900">Firebase Database Rules</h4>
+              <p className="text-[11px] text-slate-500">Copy RTDB rules for cross-user message delivery</p>
+            </div>
+          </div>
+          <button
+            onClick={onOpenRules}
+            className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-indigo-50 text-indigo-600 border border-indigo-200 text-xs font-semibold shadow-2xs active:scale-95 transition-all"
+          >
+            View Rules
+          </button>
+        </div>
+      )}
 
       {/* Sign Out Action */}
       <div className="space-y-2">

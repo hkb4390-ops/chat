@@ -19,6 +19,8 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   status: 'sent' | 'delivered' | 'read';
+  reactions?: Record<string, string>; // { [uid]: '❤️' | '🔥' | '😂' | ... }
+  isSticker?: boolean;
 }
 
 export interface ConversationItem {
@@ -37,4 +39,6 @@ export interface NotificationToast {
   title: string;
   message: string;
   timestamp?: number;
+  partner?: UserProfile;
+  onClick?: () => void;
 }

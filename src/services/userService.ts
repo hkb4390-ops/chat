@@ -261,11 +261,13 @@ export function uploadProfilePhoto(
 }
 
 /**
- * Searches users by Study ID, Username, or Display Name.
+ * Searches users by Study ID, Username, Display Name, or Email (fuzzy & prefix matching).
  */
 export async function searchUsers(searchTerm: string, currentUid?: string): Promise<UserProfile[]> {
-  const term = searchTerm.trim().toLowerCase();
-  if (!term) return [];
+  const rawTerm = searchTerm.trim().toLowerCase();
+  if (!rawTerm) return [];
+
+  const termClean = rawTerm.replace(/[@\-_\s]/g, '');
 
   const usersRef = ref(rtdb, 'users');
   const snapshot = await get(usersRef);
@@ -274,17 +276,52 @@ export async function searchUsers(searchTerm: string, currentUid?: string): Prom
 
   const results: UserProfile[] = [];
   snapshot.forEach((child) => {
-    const user = child.val() as UserProfile;
-    if (currentUid && user.uid === currentUid) return;
+    const data = child.val() || {};
+    const uid = data.uid || child.key || '';
+    if (currentUid && uid === currentUid) return;
 
-    const matchStudyId = user.studyId?.toLowerCase().includes(term);
-    const matchUsername = user.username?.toLowerCase().includes(term);
-    const matchDisplayName = user.displayName?.toLowerCase().includes(term);
-    const matchUid = user.uid.toLowerCase() === term;
+    const user: UserProfile = {
+      uid,
+      displayName: data.displayName || data.username || 'Member',
+      username: data.username || uid.slice(0, 8),
+      studyId: data.studyId || 'SM-00000',
+      email: data.email || '',
+      bio: data.bio || '',
+      photoURL: data.photoURL || undefined,
+      createdAt: data.createdAt || 0,
+      lastSeen: data.lastSeen || 0,
+      isOnline: Boolean(data.isOnline),
+      isVerified: Boolean(data.isVerified),
+    };
 
-    if (matchStudyId || matchUsername || matchDisplayName || matchUid) {
+    const username = (user.username || '').toLowerCase();
+    const displayName = (user.displayName || '').toLowerCase();
+    const studyId = (user.studyId || '').toLowerCase();
+    const email = (user.email || '').toLowerCase();
+
+    const matchRaw = 
+      username.includes(rawTerm) ||
+      displayName.includes(rawTerm) ||
+      studyId.includes(rawTerm) ||
+      email.includes(rawTerm) ||
+      uid.toLowerCase() === rawTerm;
+
+    const matchFuzzy = 
+      termClean.length >= 2 &&
+      (username.replace(/[@\-_\s]/g, '').includes(termClean) ||
+       displayName.replace(/[@\-_\s]/g, '').includes(termClean) ||
+       studyId.replace(/[@\-_\s]/g, '').includes(termClean));
+
+    if (matchRaw || matchFuzzy) {
       results.push(user);
     }
+  });
+
+  // Sort online and verified users first
+  results.sort((a, b) => {
+    if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+    if (a.isVerified !== b.isVerified) return a.isVerified ? -1 : 1;
+    return (b.lastSeen || b.createdAt || 0) - (a.lastSeen || a.createdAt || 0);
   });
 
   return results;
@@ -309,10 +346,29 @@ export async function findUserByStudyId(studyId: string): Promise<UserProfile | 
   if (!snapshot.exists()) return null;
 
   let matched: UserProfile | null = null;
+  const targetClean = cleanId.replace(/[^A-Z0-9]/g, '');
+
   snapshot.forEach((child) => {
-    const user = child.val() as UserProfile;
-    if (user.studyId && user.studyId.toUpperCase() === cleanId) {
-      matched = user;
+    const data = child.val() || {};
+    const uid = data.uid || child.key || '';
+    const sid = (data.studyId || '').toUpperCase();
+    if (sid) {
+      const userStudyClean = sid.replace(/[^A-Z0-9]/g, '');
+      if (userStudyClean === targetClean || sid === cleanId) {
+        matched = {
+          uid,
+          displayName: data.displayName || data.username || 'Member',
+          username: data.username || uid.slice(0, 8),
+          studyId: data.studyId || cleanId,
+          email: data.email || '',
+          bio: data.bio || '',
+          photoURL: data.photoURL || undefined,
+          createdAt: data.createdAt || 0,
+          lastSeen: data.lastSeen || 0,
+          isOnline: Boolean(data.isOnline),
+          isVerified: Boolean(data.isVerified),
+        };
+      }
     }
   });
 
@@ -321,30 +377,42 @@ export async function findUserByStudyId(studyId: string): Promise<UserProfile | 
 
 /**
  * Fetches actual registered users for Discover suggestions.
- * Strictly no fake data: returns empty list if no other users are registered.
+ * Shows all available classmates (online & verified first).
  */
-export async function getSuggestedUsers(currentUid: string, maxCount: number = 20): Promise<UserProfile[]> {
-  const usersRef = query(ref(rtdb, 'users'), limitToLast(maxCount));
+export async function getSuggestedUsers(currentUid: string, maxCount: number = 50): Promise<UserProfile[]> {
+  const usersRef = ref(rtdb, 'users');
   const snapshot = await get(usersRef);
   if (!snapshot.exists()) return [];
 
   const list: UserProfile[] = [];
   snapshot.forEach((child) => {
-    const user = child.val() as UserProfile;
-    if (user.uid !== currentUid) {
-      list.push(user);
+    const data = child.val() || {};
+    const uid = data.uid || child.key || '';
+    if (uid && uid !== currentUid) {
+      list.push({
+        uid,
+        displayName: data.displayName || data.username || 'Member',
+        username: data.username || uid.slice(0, 8),
+        studyId: data.studyId || 'SM-00000',
+        email: data.email || '',
+        bio: data.bio || '',
+        photoURL: data.photoURL || undefined,
+        createdAt: data.createdAt || 0,
+        lastSeen: data.lastSeen || 0,
+        isOnline: Boolean(data.isOnline),
+        isVerified: Boolean(data.isVerified),
+      });
     }
   });
 
-  // Sort online users first, then by creation date
+  // Sort online first, then verified, then by recent activity
   list.sort((a, b) => {
-    if (a.isOnline === b.isOnline) {
-      return (b.createdAt || 0) - (a.createdAt || 0);
-    }
-    return a.isOnline ? -1 : 1;
+    if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+    if (a.isVerified !== b.isVerified) return a.isVerified ? -1 : 1;
+    return (b.lastSeen || b.createdAt || 0) - (a.lastSeen || a.createdAt || 0);
   });
 
-  return list;
+  return list.slice(0, maxCount);
 }
 
 /**

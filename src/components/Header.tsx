@@ -1,11 +1,12 @@
 import React from 'react';
-import { Sparkles, Search, MessageSquare } from 'lucide-react';
+import { Sparkles, Search, MessageSquare, ShieldCheck } from 'lucide-react';
 import { UserProfile } from '../types';
 
 interface HeaderProps {
   currentUser: UserProfile | null;
   onOpenSearch: () => void;
   onOpenProfile: () => void;
+  onOpenRules?: () => void;
   isOnline: boolean;
 }
 
@@ -13,6 +14,7 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onOpenSearch,
   onOpenProfile,
+  onOpenRules,
   isOnline,
 }) => {
   return (
@@ -63,6 +65,18 @@ export const Header: React.FC<HeaderProps> = ({
               </>
             )}
           </div>
+
+          {/* Database Rules Shortcut */}
+          {onOpenRules && (
+            <button
+              onClick={onOpenRules}
+              className="p-2 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-white active:scale-95 transition-all border border-transparent hover:border-white shadow-2xs"
+              title="Firebase Database Rules Guide"
+              aria-label="Firebase Database Rules Guide"
+            >
+              <ShieldCheck className="w-4 h-4 text-indigo-600" />
+            </button>
+          )}
 
           {/* Quick Search Button */}
           <button

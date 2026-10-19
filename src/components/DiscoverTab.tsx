@@ -38,6 +38,30 @@ export const DiscoverTab: React.FC<DiscoverTabProps> = ({
   const [isSearching, setIsSearching] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Instant live search as user types
+  React.useEffect(() => {
+    const term = searchTerm.trim();
+    if (!term) {
+      setSearchResults(null);
+      setIsSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const results = await searchUsers(term, currentUser.uid);
+        setSearchResults(results);
+      } catch (err: any) {
+        console.warn('Search notice:', err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 220);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, currentUser.uid]);
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const term = searchTerm.trim();

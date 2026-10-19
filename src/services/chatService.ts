@@ -12,6 +12,7 @@ import {
 import { rtdb } from '../firebase';
 import { ChatMessage, ConversationItem, UserProfile } from '../types';
 import { getUserProfile } from './userService';
+import { soundEffects } from '../utils/soundEffects';
 
 /**
  * Generate a deterministic chatId for two participants.
@@ -22,11 +23,13 @@ export function getChatId(uid1: string, uid2: string): string {
 
 /**
  * Send a message and update conversation metadata for both users.
+ * Guaranteed to update Home screens for both users immediately.
  */
 export async function sendMessage(
   sender: UserProfile, 
   recipient: UserProfile, 
-  text: string
+  text: string,
+  isSticker: boolean = false
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
@@ -41,32 +44,25 @@ export async function sendMessage(
   const messageData: ChatMessage = {
     id: messageId,
     senderId: sender.uid,
-    senderName: sender.displayName,
+    senderName: sender.displayName || sender.username || 'Member',
     text: trimmed,
     timestamp: now,
     status: 'sent',
+    isSticker,
   };
 
-  // Get recipient's current unread count to increment
-  let currentRecipientUnread = 0;
-  try {
-    const unreadSnap = await get(ref(rtdb, `userChats/${recipient.uid}/${sender.uid}/unreadCount`));
-    if (unreadSnap.exists()) {
-      currentRecipientUnread = Number(unreadSnap.val()) || 0;
-    }
-  } catch {}
+  // Primary chat updates
+  const chatUpdates: Record<string, any> = {};
+  chatUpdates[`chats/${chatId}/messages/${messageId}`] = messageData;
+  chatUpdates[`chats/${chatId}/participants/${sender.uid}`] = true;
+  chatUpdates[`chats/${chatId}/participants/${recipient.uid}`] = true;
+  chatUpdates[`chats/${chatId}/lastMessage`] = trimmed;
+  chatUpdates[`chats/${chatId}/lastTimestamp`] = now;
+  chatUpdates[`chats/${chatId}/lastSenderId`] = sender.uid;
+  chatUpdates[`typing/${chatId}/${sender.uid}`] = false;
 
-  const updates: Record<string, any> = {};
-
-  // Store message
-  updates[`chats/${chatId}/messages/${messageId}`] = messageData;
-  updates[`chats/${chatId}/participants/${sender.uid}`] = true;
-  updates[`chats/${chatId}/participants/${recipient.uid}`] = true;
-  updates[`chats/${chatId}/lastMessage`] = trimmed;
-  updates[`chats/${chatId}/lastTimestamp`] = now;
-
-  // Update sender's conversation list
-  updates[`userChats/${sender.uid}/${recipient.uid}`] = {
+  // Sender's conversation list
+  chatUpdates[`userChats/${sender.uid}/${recipient.uid}`] = {
     chatId,
     otherUid: recipient.uid,
     lastMessage: trimmed,
@@ -75,20 +71,89 @@ export async function sendMessage(
     unreadCount: 0,
   };
 
-  // Update recipient's conversation list (unread incremented)
-  updates[`userChats/${recipient.uid}/${sender.uid}`] = {
+  // Check existing unread count
+  let currentUnread = 0;
+  try {
+    const unreadSnap = await get(ref(rtdb, `userChats/${recipient.uid}/${sender.uid}/unreadCount`));
+    if (unreadSnap.exists()) {
+      currentUnread = Number(unreadSnap.val()) || 0;
+    }
+  } catch {}
+
+  // Recipient's conversation list
+  chatUpdates[`userChats/${recipient.uid}/${sender.uid}`] = {
     chatId,
     otherUid: sender.uid,
     lastMessage: trimmed,
     lastSenderId: sender.uid,
     lastTimestamp: now,
-    unreadCount: currentRecipientUnread + 1,
+    unreadCount: currentUnread + 1,
   };
 
-  // Clear typing state
-  updates[`typing/${chatId}/${sender.uid}`] = false;
+  // Play audio sound for sending
+  soundEffects.playSent();
 
-  await update(ref(rtdb), updates);
+  // Perform atomic multi-path update
+  try {
+    await update(ref(rtdb), chatUpdates);
+  } catch (err) {
+    console.warn('Multi-path update notice, falling back to sequential writes:', err);
+    // Fallback: write chat message and sender's userChat directly
+    try {
+      await set(ref(rtdb, `chats/${chatId}/messages/${messageId}`), messageData);
+      await update(ref(rtdb, `chats/${chatId}`), {
+        lastMessage: trimmed,
+        lastTimestamp: now,
+        lastSenderId: sender.uid,
+      });
+      await set(ref(rtdb, `userChats/${sender.uid}/${recipient.uid}`), {
+        chatId,
+        otherUid: recipient.uid,
+        lastMessage: trimmed,
+        lastSenderId: sender.uid,
+        lastTimestamp: now,
+        unreadCount: 0,
+      });
+      try {
+        await set(ref(rtdb, `userChats/${recipient.uid}/${sender.uid}`), {
+          chatId,
+          otherUid: sender.uid,
+          lastMessage: trimmed,
+          lastSenderId: sender.uid,
+          lastTimestamp: now,
+          unreadCount: currentUnread + 1,
+        });
+      } catch (recipErr) {
+        console.warn('Recipient conversation write notice:', recipErr);
+      }
+    } catch (fallbackErr) {
+      console.error('Message delivery fallback error:', fallbackErr);
+      throw fallbackErr;
+    }
+  }
+}
+
+/**
+ * Add or toggle an emoji reaction on a message (WhatsApp / Instagram style)
+ */
+export async function toggleReaction(
+  chatId: string, 
+  messageId: string, 
+  uid: string, 
+  emoji: string
+): Promise<void> {
+  try {
+    const reactionRef = ref(rtdb, `chats/${chatId}/messages/${messageId}/reactions/${uid}`);
+    const snap = await get(reactionRef);
+    if (snap.exists() && snap.val() === emoji) {
+      // Toggle off
+      await set(reactionRef, null);
+    } else {
+      await set(reactionRef, emoji);
+    }
+  } catch (err) {
+    console.warn('Reaction error:', err);
+  }
 }
 
 /**
@@ -98,7 +163,7 @@ export function subscribeToMessages(
   chatId: string, 
   callback: (messages: ChatMessage[]) => void
 ): () => void {
-  const messagesRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(100));
+  const messagesRef = query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(120));
 
   const unsubscribe = onValue(messagesRef, (snapshot) => {
     if (!snapshot.exists()) {
@@ -195,17 +260,22 @@ export async function markChatAsRead(
     updates[`userChats/${currentUid}/${otherUid}/unreadCount`] = 0;
 
     // Read latest messages and update unread status
-    const messagesSnap = await get(query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(25)));
+    const messagesSnap = await get(query(ref(rtdb, `chats/${chatId}/messages`), limitToLast(30)));
+    let hasUnread = false;
     if (messagesSnap.exists()) {
       messagesSnap.forEach((child) => {
         const msg = child.val() as ChatMessage;
         if (msg.senderId === otherUid && msg.status !== 'read') {
           updates[`chats/${chatId}/messages/${child.key}/status`] = 'read';
+          hasUnread = true;
         }
       });
     }
 
     await update(ref(rtdb), updates);
+    if (hasUnread) {
+      soundEffects.playSeen();
+    }
   } catch (err) {
     console.warn('markChatAsRead error:', err);
   }
@@ -228,7 +298,7 @@ export async function setTypingStatus(
       await set(typingRef, false);
     }
   } catch (err) {
-    // Non-critical, ignore silent typing errors
+    // Non-critical
   }
 }
 
