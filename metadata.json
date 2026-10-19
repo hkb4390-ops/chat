@@ -1,0 +1,10 @@
+{
+  "name": "Study Mods Chat",
+  "description": "Real-time messaging web application with Firebase Authentication, Realtime Database, user discovery, typing indicators, read receipts, and QR profile sharing.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
